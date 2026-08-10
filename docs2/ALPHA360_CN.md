@@ -79,7 +79,7 @@ Alpha360 (360个特征)
 ROC5 = Ref($close, 5) / $close          # 5日动量
 MA10 = Mean($close, 10) / $close        # 10日均线
 STD20 = Std($close, 20) / $close        # 20日波动率
-CORR30 = Corr($close, $volume, 30)      # 30日量价相关
+CORR30 = Corr($close, Log($volume+1), 30)  # 30日量价相关
 ...
 # 共158个这样的特征
 ```
