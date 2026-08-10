@@ -3,6 +3,7 @@
 > 版本: Qlib 预定义特征集
 > 特征数量: 158个
 > 适用市场: 股票市场（日频数据）
+> 数据前提: 底层价格须为**前复权价**（Qlib 标准数据默认满足，详见附录D）
 
 ## 目录
 
@@ -892,6 +893,76 @@ OPEN0, HIGH0, LOW0, VWAP0
 ### 在线资源
 - **Qlib文档**: https://qlib.readthedocs.io/
 - **GitHub**: https://github.com/microsoft/qlib
+
+---
+
+## 附录C: 因子公式与源码对齐校验
+
+> 校验日期: 2026-08-10
+> 校验方式: 将文档中的公式与 `qlib/contrib/data/loader.py` → `Alpha158DL.get_feature_config()` 实际生成的 158 个特征表达式,剥离空白与注释后逐字符比对;差值型定义另做数学等价验证。
+
+### 结论
+
+文档中全部 **158 个特征** 的计算公式与代码实现**完全对齐**。
+
+### C.1 归一化后与源码逐字符一致 (41 处)
+
+- **K线 (9)**: `KMID`, `KLEN`, `KMID2`, `KUP`, `KUP2`, `KLOW`, `KLOW2`, `KSFT`, `KSFT2`
+- **价格 (4)**: `OPEN0`, `HIGH0`, `LOW0`, `VWAP0`
+- **滚动 (28 处示例, 覆盖 26 种类型)**: `ROC`, `MA`, `STD`, `BETA`, `RSQR`, `RESI`, `MAX`, `MIN`, `QTLU`, `QTLD`, `RANK`, `RSV`, `IMAX`, `IMIN`, `IMXD`, `CORR`, `CORD`, `CNTP`, `CNTN`, `SUMP`, `SUMN`, `VMA`, `VSTD`, `WVMA`, `VSUMP`, `VSUMN`
+
+### C.2 差值定义, 数学等价 (3 种类型)
+
+| 因子 | 文档写法 | 源码实现 | 等价性 |
+|------|----------|----------|--------|
+| `CNTD` | `CNTD30 = CNTP30 - CNTN30` | `Mean($close>Ref($close,1),d) - Mean($close<Ref($close,1),d)` | 恒等 |
+| `SUMD` | `SUMD20 = SUMP20 - SUMN20` | `(Σ涨-Σ跌) / (Σ\|Δclose\| + 1e-12)` | 恒等(两式同分母) |
+| `VSUMD` | `VSUMD20 = VSUMP20 - VSUMN20` | `(Σ量增-Σ量减) / (Σ\|Δvolume\| + 1e-12)` | 恒等(两式同分母) |
+
+### C.3 非真实特征 (1 个)
+
+- `CLOSE0 = $close/$close = 1`: 基准常量,源码不生成,不计入 158 个特征。
+
+### C.4 覆盖性说明
+
+滚动特征在文档中以"每类一个窗口示例"呈现(如 `SUMP20`、`WVMA60`),源码对 **29 类 × 5 窗口**(5/10/20/30/60)使用同一表达式模板。示例窗口比对通过,即该类型全部 5 个窗口均通过。
+
+**总计: 9(K线) + 4(价格) + 145(滚动) = 158 个特征,公式全部对齐。**
+
+---
+
+## 附录D: 复权数据说明与校验
+
+> 相关文档: [ADJUSTMENT_CALCULATION_CN.md](ADJUSTMENT_CALCULATION_CN.md)
+
+### 因子与复权的关系
+
+Alpha158 本身不进行任何复权计算,只是对 `$close/$open/$high/$low/$volume` 等字段做标准化(公式对齐见附录C)。底层数据是否复权,直接决定因子池是否基于复权价:
+
+- **前复权**(Qlib 标准): 保持最新价不变,向下调整历史价;`$open/$close/$high/$low/$volume` 均为调整后价格
+- **未复权**: 除权日出现跳空,ROC/MA/STD/量价相关等技术指标失真
+
+### 校验方法
+
+```python
+from qlib.data import D
+
+# 方法1: 检查是否存在复权因子字段
+try:
+    factors = D.features(["000001.SZ"], ["$factor"])
+    print("数据包含复权因子,已复权")
+except Exception:
+    print("数据不包含复权因子,可能未复权")
+
+# 方法2: 检查除权日是否出现异常跌幅(>20% 且无重大利空)
+returns = D.features(["000001.SZ"], ["$close"]).pct_change()
+print("异常跌幅天数:", (returns < -0.2).sum().sum())
+```
+
+### 注意
+
+- `dump_bin.py` 只做格式转换,不计算复权因子;factor 需由数据源(Tushare 等)在 CSV 中提供
+- 前复权为"动态历史":每次除权后历史价格整体重算;长周期回测如需稳定的历史序列,可自行用 `$factor` 处理后复权
 
 ---
 

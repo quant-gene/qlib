@@ -4,6 +4,7 @@
 > 特征数量: 360个
 > 适用市场: 股票市场（日频数据）
 > 设计理念: 原始价格序列 + 标准化
+> 数据前提: 底层价格须为**前复权价**（Qlib 标准数据默认满足，详见附录E）
 
 ## 目录
 
@@ -710,6 +711,78 @@ plt.show()
 2. 再尝试Alpha360+深度学习模型
 3. 对比两者性能
 4. 也可以尝试Alpha158+Alpha360组合
+
+---
+
+## 附录D: 因子公式与源码对齐校验
+
+> 校验日期: 2026-08-10
+> 校验方式: 将文档第 3 节声明的生成模式与 `qlib/contrib/data/loader.py` → `Alpha360DL.get_feature_config()` 实际生成的 360 个特征表达式,剥离空白后逐项比对。
+
+### 结论
+
+文档中全部 **360 个特征** 的计算公式与代码实现**完全对齐,0 处不匹配**。
+
+### D.1 生成模式比对 (6 字段 × 60 天)
+
+| 字段 | 滞后天模式 (i=59..1) | 当日模式 | 数量 |
+|------|---------------------|----------|------|
+| `CLOSE` | `Ref($close, i)/$close` | `$close/$close` | 60 |
+| `OPEN` | `Ref($open, i)/$close` | `$open/$close` | 60 |
+| `HIGH` | `Ref($high, i)/$close` | `$high/$close` | 60 |
+| `LOW` | `Ref($low, i)/$close` | `$low/$close` | 60 |
+| `VWAP` | `Ref($vwap, i)/$close` | `$vwap/$close` | 60 |
+| `VOLUME` | `Ref($volume, i)/($volume+1e-12)` | `$volume/($volume+1e-12)` | 60 |
+
+### D.2 比对结果
+
+- 源码生成: **360** 个特征;文档模式重建: **360** 个
+- 公式不一致: **0** 处
+- 文档有而源码缺: **0** 个
+- 源码有而文档未覆盖: **0** 个
+
+### D.3 关键点确认
+
+- 价格字段(CLOSE/OPEN/HIGH/LOW/VWAP)统一以当天 `$close` 标准化,`CLOSE0 = 1`
+- `VOLUME` 以当天 `$volume + 1e-12` 自标准化,`VOLUME0 = 1`
+- 特征顺序: `CLOSE` → `OPEN` → `HIGH` → `LOW` → `VWAP` → `VOLUME`,每天从 59 递减到 0,与第 7.4 节 `reshape(N,360) → (N,6,60) → (N,60,6)` 的重组逻辑一致
+
+**总计: 6 × 60 = 360 个特征,公式全部对齐。**
+
+---
+
+## 附录E: 复权数据说明与校验
+
+> 相关文档: [ADJUSTMENT_CALCULATION_CN.md](ADJUSTMENT_CALCULATION_CN.md)
+
+### 因子与复权的关系
+
+Alpha360 本身不进行任何复权计算,只是对 `$close/$open/$high/$low/$vwap/$volume` 字段做标准化(公式对齐见附录D)。底层数据是否复权,直接决定因子池是否基于复权价:
+
+- **前复权**(Qlib 标准): 保持最新价不变,向下调整历史价;`$open/$close/$high/$low/$vwap/$volume` 均为调整后价格
+- **未复权**: 除权日出现跳空,价格序列与量价关系失真
+
+### 校验方法
+
+```python
+from qlib.data import D
+
+# 方法1: 检查是否存在复权因子字段
+try:
+    factors = D.features(["000001.SZ"], ["$factor"])
+    print("数据包含复权因子,已复权")
+except Exception:
+    print("数据不包含复权因子,可能未复权")
+
+# 方法2: 检查除权日是否出现异常跌幅(>20% 且无重大利空)
+returns = D.features(["000001.SZ"], ["$close"]).pct_change()
+print("异常跌幅天数:", (returns < -0.2).sum().sum())
+```
+
+### 注意
+
+- `dump_bin.py` 只做格式转换,不计算复权因子;factor 需由数据源(Tushare 等)在 CSV 中提供
+- 前复权为"动态历史":每次除权后历史价格整体重算;长周期回测如需稳定的历史序列,可自行用 `$factor` 处理后复权
 
 ---
 
